@@ -1,0 +1,25 @@
+name: wifi_tv_cast
+description: Cast laptop screen to Android TV/phone over WiFi (Miracast-style).
+publish_to: 'none'
+# Android TV leanback + free full-desktop cast (no paid trial)
+version: 1.0.4+5
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  wakelock_plus: ^1.2.10
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/sender/
+    - assets/certs/

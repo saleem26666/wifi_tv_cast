@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>TV WiFi Cast — Laptop Sender</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --card: #1a2332;
+      --accent: #3d9cf0;
+      --ok: #3dd68c;
+      --warn: #f5a524;
+      --text: #e8eef7;
+      --muted: #8b9bb4;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Segoe UI", system-ui, sans-serif;
+      background: radial-gradient(1200px 600px at 20% -10%, #1e3a5f 0%, var(--bg) 55%);
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+    .card {
+      width: min(560px, 100%);
+      background: var(--card);
+      border-radius: 20px;
+      padding: 28px 26px;
+      box-shadow: 0 24px 60px rgba(0,0,0,.45);
+      border: 1px solid rgba(255,255,255,.06);
+    }
+    h1 { margin: 0 0 8px; font-size: 1.55rem; font-weight: 700; }
+    p { margin: 0 0 14px; color: var(--muted); line-height: 1.5; }
+    .status {
+      display: flex; align-items: center; gap: 10px;
+      padding: 12px 14px; border-radius: 12px;
+      background: rgba(255,255,255,.04); margin-bottom: 18px;
+      font-size: .95rem;
+    }
+    .dot {
+      width: 10px; height: 10px; border-radius: 50%;
+      background: var(--warn); flex-shrink: 0;
+    }
+    .dot.on { background: var(--ok); box-shadow: 0 0 10px var(--ok); }
+    .dot.err { background: #f04438; }
+    button {
+      width: 100%; border: 0; border-radius: 14px; padding: 14px 16px;
+      font-size: 1.05rem; font-weight: 650; cursor: pointer;
+      background: var(--accent); color: #041018; margin-bottom: 10px;
+    }
+    button.secondary { background: rgba(255,255,255,.08); color: var(--text); }
+    button:disabled { opacity: .45; cursor: not-allowed; }
+    .hint { font-size: .85rem; color: var(--muted); margin-top: 8px; }
+    .banner {
+      display: none;
+      margin-bottom: 16px;
+      padding: 12px 14px;
+      border-radius: 12px;
+      background: rgba(240, 68, 56, 0.15);
+      border: 1px solid rgba(240, 68, 56, 0.35);
+      color: #ffb4ae;
+      font-size: .9rem;
+      line-height: 1.45;
+    }
+    .banner.show { display: block; }
+    .banner code {
+      display: inline-block;
+      margin-top: 6px;
+      padding: 2px 6px;
+      border-radius: 6px;
+      background: rgba(0,0,0,.35);
+      color: #fff;
+      font-size: .82rem;
+    }
+    video, canvas { display: none; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Cast laptop → TV</h1>
+    <p>Keep the phone/TV app running on the same WiFi. Use Chrome or Edge.</p>
+    <div id="insecureBanner" class="banner">
+      Chrome blocks screen share on plain HTTP (“Not secure”).
+      Open the <b>https://</b> address shown in the phone app (port 8443),
+      then click <b>Advanced → Proceed</b> for the certificate warning.
+      <br/><br/>
+      Or in Chrome open <code>chrome://flags/#unsafely-treat-insecure-origin-as-secure</code>,
+      enable it, add this page’s exact URL, relaunch Chrome, and try again.
+    </div>
+    <div class="status">
+      <span class="dot" id="dot"></span>
+      <span id="status">Connecting…</span>
+    </div>
+    <button id="startBtn" disabled>Share screen</button>
+    <button id="stopBtn" class="secondary" disabled>Stop</button>
+    <p class="hint">Chrome always asks what to share. For automatic FULL desktop with no picker, run laptop_sender\Start_Full_Screen_Cast.bat on the PC instead.</p>
+  </div>
+  <video id="video" playsinline muted></video>
+  <canvas id="canvas"></canvas>
+  <script>
+    const wsUrl = (location.protocol === 'https:' ? 'wss://' : 'ws://')
+      + location.host + '/ws';
+    const statusEl = document.getElementById('status');
+    const dot = document.getElementById('dot');
+    const startBtn = document.getElementById('startBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const video = document.getElementById('video');
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d', { alpha: false });
+    const insecureBanner = document.getElementById('insecureBanner');
+
+    let ws = null;
+    let stream = null;
+    let timer = null;
+    let sending = false;
+
+    if (!window.isSecureContext) {
+      insecureBanner.classList.add('show');
+    }
+
+    function setStatus(text, mode) {
+      statusEl.textContent = text;
+      dot.className = 'dot' + (mode === 'on' ? ' on' : mode === 'err' ? ' err' : '');
+    }
+
+    function connect() {
+      ws = new WebSocket(wsUrl);
+      ws.binaryType = 'arraybuffer';
+      ws.onopen = () => {
+        if (!window.isSecureContext) {
+          setStatus('Connected, but screen share needs HTTPS — see red box', 'err');
+          startBtn.disabled = false;
+          return;
+        }
+        setStatus('Connected to TV app — tap Share screen', 'on');
+        startBtn.disabled = false;
+      };
+      ws.onclose = () => {
+        setStatus('Disconnected — refresh this page', 'err');
+        startBtn.disabled = true;
+        stopCast();
+        setTimeout(connect, 1500);
+      };
+      ws.onerror = () => setStatus('Check WiFi / IP address', 'err');
+    }
+
+    async function startCast() {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+        setStatus('This browser cannot share screen', 'err');
+        insecureBanner.classList.add('show');
+        return;
+      }
+      if (!window.isSecureContext) {
+        setStatus('Blocked: open https:// address from the phone app', 'err');
+        insecureBanner.classList.add('show');
+        return;
+      }
+      try {
+        stream = await navigator.mediaDevices.getDisplayMedia({
+          video: { frameRate: 15, width: { ideal: 1280 }, height: { ideal: 720 } },
+          audio: false,
+        });
+      } catch (e) {
+        const name = (e && e.name) ? e.name : '';
+        if (name === 'NotAllowedError') {
+          setStatus('Permission denied or cancelled — try Share screen again', 'err');
+        } else {
+          setStatus('Screen share failed: ' + (e.message || name || 'unknown'), 'err');
+          insecureBanner.classList.add('show');
+        }
+        return;
+      }
+      video.srcObject = stream;
+      await video.play();
+      stream.getVideoTracks()[0].addEventListener('ended', stopCast);
+      sending = true;
+      startBtn.disabled = true;
+      stopBtn.disabled = false;
+      setStatus('Casting… watch the TV / phone', 'on');
+
+      const tick = async () => {
+        if (!sending || !ws || ws.readyState !== 1) return;
+        const w = video.videoWidth || 1280;
+        const h = video.videoHeight || 720;
+        const maxW = 1280;
+        const scale = w > maxW ? maxW / w : 1;
+        canvas.width = Math.round(w * scale);
+        canvas.height = Math.round(h * scale);
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        const blob = await new Promise((r) => canvas.toBlob(r, 'image/jpeg', 0.62));
+        if (blob && ws.readyState === 1) {
+          const buf = await blob.arrayBuffer();
+          if (buf.byteLength < 900000) ws.send(buf);
+        }
+        timer = setTimeout(tick, 80);
+      };
+      tick();
+    }
+
+    function stopCast() {
+      sending = false;
+      if (timer) clearTimeout(timer);
+      timer = null;
+      if (stream) {
+        stream.getTracks().forEach((t) => t.stop());
+        stream = null;
+      }
+      video.srcObject = null;
+      startBtn.disabled = !(ws && ws.readyState === 1);
+      stopBtn.disabled = true;
+      if (ws && ws.readyState === 1) setStatus('Stopped — tap Share screen again', 'on');
+    }
+
+    startBtn.onclick = startCast;
+    stopBtn.onclick = stopCast;
+    connect();
+  </script>
+</body>
+</html>
